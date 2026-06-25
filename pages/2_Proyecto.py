@@ -187,10 +187,10 @@ st.subheader(f"KPIs · Inicio en {mes_label}")
 col1, col2, col3, col4, col5, col6 = st.columns(6)
 col1.metric("Terreno máximo", f"u$s {terreno * 1000:,.0f}")
 col2.metric("TIR anual", f"{result['tir_anual'] * 100:.2f}%")
-col3.metric("Rentabilidad s/cap.", f"{result['rentabilidad_cap'] * 100:.2f}%")
-col4.metric("Margen bruto", f"u$s {result['margen_bruto_usd'] / 1e6:.2f}M")
-col5.metric("Máx. exposición", f"u$s {result['max_exposicion_cap_usd'] / 1e6:.2f}M")
-col6.metric("Total ventas", f"u$s {result['monto_total_ventas'] * 1000 / 1e6:.2f}M")
+col3.metric("Rentabilidad s/cap.", f"{result['rentabilidad'] * 100:.2f}%")
+col4.metric("Margen bruto", f"u$s {result['margen_bruto'] / 1e3:.2f}M")
+col5.metric("Máx. exposición", f"u$s {result['max_exposicion'] / 1e3:.2f}M")
+col6.metric("Total ventas", f"u$s {result['monto_total_ventas'] / 1e3:.2f}M")
 
 # ============================================================
 # GRÁFICO DE FLUJO DE CAJA
