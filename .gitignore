@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+backtest_v3_*.csv
+backtest_v3_*.png
+*.xlsx
+build_excel_v1.py
