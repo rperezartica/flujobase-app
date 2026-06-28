@@ -169,32 +169,54 @@ def compute_hipotetico(
     tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
     tc_col, costo_serie, precio_col,
 ):
-    """Escenario hipotético: aplica tasas constantes a TODO el período (histórico + proyectado)."""
+    """
+    Escenario hipotético: para cada mes de inicio toma el valor realizado de
+    precio y costo en ese mes, y desde ahí proyecta 36 meses a las tasas
+    constantes del escenario — sin usar la trayectoria real de los meses
+    siguientes.
+
+    Análogo a backtest_naive() pero con crecimiento a tasa constante en lugar
+    de congelar los valores (0%/0%).
+    """
     df_raw = cargar_y_preparar_series(
         tc_col=tc_col, costo_serie=costo_serie, precio_col=precio_col
     )
     cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px = construir_anclas(df_raw)
 
-    params_motor = {"tasa_precio_anual": tasa_precio, "tasa_cac_usd_anual": tasa_costo}
+    # Extender con crecimiento cero: solo para poder leer el valor realizado
+    # en meses de inicio muy recientes que caen fuera de la serie histórica pura.
+    # El valor en el ancla y posteriores queda congelado (= precio_anchor / cac_anchor).
     df_ext = extender_con_proyeccion(
         df_raw, cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px,
-        params=params_motor, horizonte_meses=60,
+        params={"tasa_precio_anual": 0.0, "tasa_cac_usd_anual": 0.0},
+        horizonte_meses=60,
     )
 
+    tasa_px_mensual  = (1 + tasa_precio)  ** (1 / 12) - 1
+    tasa_cac_mensual = (1 + tasa_costo)   ** (1 / 12) - 1
+    meses_idx = np.arange(N_MESES + 1)
+
     fecha_min = df_raw["precio_usd"].dropna().index.min()
-    # El hipotético corre en todo el rango histórico + proyectado
     fecha_hasta = pd.Timestamp("2029-06-01")
     meses_inicio = pd.date_range(fecha_min, fecha_hasta, freq="MS")
 
     rows = []
     for start in meses_inicio:
-        tray = trayectoria_mensual(
-            df_ext, start, cac_anchor, precio_anchor,
-            precio_base=precio_base, costo_base=costo_base,
-        )
-        if tray is None:
+        # Leer SOLO el valor realizado en el mes de inicio (índice 0)
+        fecha_start = pd.DatetimeIndex([start])
+        cac_val = df_ext.reindex(fecha_start)["CAC_USD"]
+        px_val  = df_ext.reindex(fecha_start)["precio_usd"]
+        if cac_val.isna().any() or px_val.isna().any():
             continue
-        costo_m, precio_m = tray
+
+        # Rebase del mes de inicio (igual que trayectoria_mensual para el mes 0)
+        costo_0  = costo_base  * (float(cac_val.iloc[0]) / cac_anchor)
+        precio_0 = precio_base * (float(px_val.iloc[0])  / precio_anchor)
+
+        # Proyectar a tasas constantes del escenario para los 37 meses del proyecto
+        costo_m  = costo_0  * (1 + tasa_cac_mensual) ** meses_idx
+        precio_m = precio_0 * (1 + tasa_px_mensual)  ** meses_idx
+
         try:
             r = resolver_terreno_max(costo_m, precio_m, tir_objetivo=tir_objetivo)
         except RuntimeError:
