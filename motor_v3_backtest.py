@@ -48,6 +48,25 @@ CAC_COL    = "indice_cac_reshape_mensual.Indice_CostoConstruccion"
 REMAX_COL  = "Índice Remax.Valor M2 (USD)"
 ZP_COL     = "ZonaProp.ESTRENAR"
 CCL_COL    = "CCL_Yahoo_Sintetico"
+ICC_COL    = "ICC_INDEC"
+
+# Columnas de tipo de cambio disponibles para dolarizar costos
+TC_COLS = {
+    "CCL":         "CCL_Yahoo_Sintetico",
+    "MEP":         "MEP_Bolsa",
+    "Oficial BNA": "Oficial_BNA",
+    "Blue":        "Blue_Venta",
+}
+
+# Columnas de precio disponibles para el rebase
+PRECIO_COLS = {
+    "ZP ESTRENAR":               "ZonaProp.ESTRENAR",
+    "ZP POZO":                   "ZonaProp.POZO",
+    "ZP USADO":                  "ZonaProp.USADO",
+    "ZP INDEX CABA":             "ZonaProp.INDEX CABA",
+    "Remax-UCEMA":               "Índice Remax.Valor M2 (USD)",
+    "Remax empalmada INDEX CABA": "REMAX_EMPALMADA",
+}
 
 # ============================================================
 # PARÁMETROS DE PROYECCIÓN (editables)
@@ -59,16 +78,30 @@ PARAMS_PROYECCION = {
 }
 
 
-def cargar_y_preparar_series(path_csv=None):
+def cargar_y_preparar_series(
+    path_csv=None,
+    tc_col="CCL_Yahoo_Sintetico",
+    costo_serie="cac_camarco",
+    precio_col="ZonaProp.ESTRENAR",
+):
     """
     Carga Combinadas y prepara las series para el motor.
 
-    Serie de precio: ZonaProp ESTRENAR puro (2016-hoy), sin empalme con Remax.
-    Remax mide el mercado general/usado y no es comparable con ESTRENAR.
-    Se carga igualmente como columna de referencia adicional en los gráficos.
+    Parámetros
+    ----------
+    tc_col : str
+        Columna de tipo de cambio para dolarizar el costo.
+        Default "CCL_Yahoo_Sintetico" (comportamiento original).
+    costo_serie : str
+        Serie base de costo en pesos. Opciones:
+          "cac_camarco" (default): usa indice_cac_reshape_mensual.Indice_CostoConstruccion
+          "icc_indec"             : usa ICC_INDEC; huecos se cubren con variación del CAC CAMARCO
+    precio_col : str
+        Columna de precio de venta para el rebase.
+        Default "ZonaProp.ESTRENAR" (comportamiento original).
 
-    CAC_USD: CAC en pesos nominales dolarizado via CCL (solo para calcular
-    ratios de rebase — no es un precio interpretable en u$s/m2).
+    CAC_USD: serie de costo dolarizada, usada SOLO para ratios de rebase.
+    No representa un precio real en u$s/m2.
     """
     if path_csv is None:
         path_csv = HERE / "combinadas.csv"
@@ -76,17 +109,53 @@ def cargar_y_preparar_series(path_csv=None):
     APY_COL_GLOBAL = "indice_cac_reshape_mensual.Apymeco Proyectado"
     USADO_COL  = "ZonaProp.USADO"
     POZO_COL   = "ZonaProp.POZO"
-    df = df[[
-        "Fecha", CAC_COL, REMAX_COL, ZP_COL, CCL_COL, APY_COL_GLOBAL, USADO_COL, POZO_COL
-    ]].set_index("Fecha").sort_index()
+
+    # Columnas adicionales de TC y precio (para flexibilidad, sin cambiar interfaz)
+    extra_tc_cols = [c for c in ["MEP_Bolsa", "Oficial_BNA", "Blue_Venta"] if c in df.columns]
+    extra_px_cols = [c for c in ["ZonaProp.POZO", "ZonaProp.USADO", "ZonaProp.INDEX CABA",
+                                  "Índice Remax.Valor M2 (USD)", "REMAX_EMPALMADA",
+                                  ICC_COL] if c in df.columns]
+
+    base_cols = ["Fecha", CAC_COL, REMAX_COL, ZP_COL, CCL_COL, APY_COL_GLOBAL,
+                 USADO_COL, POZO_COL]
+    all_cols = base_cols + [c for c in extra_tc_cols + extra_px_cols if c not in base_cols]
+    df = df[all_cols].set_index("Fecha").sort_index()
     df = df.rename(columns={APY_COL_GLOBAL: "Apymeco_ARS", USADO_COL: "precio_usado",
                              POZO_COL: "precio_pozo"})
 
-    # Dolarizar CAC (ratio de rebase, no precio real en u$s/m2)
-    df["CAC_USD"] = df[CAC_COL] / df[CCL_COL]
+    # --- Construir serie de costo en pesos ---
+    if costo_serie == "icc_indec" and ICC_COL in df.columns:
+        cost_ars = df[ICC_COL].copy()
+        # Cubrir huecos (ej: último mes no publicado aún) con variación del CAC CAMARCO
+        if cost_ars.isna().any():
+            cac = df[CAC_COL]
+            # Huecos hacia adelante (más frecuentes: dato ICC no publicado todavía)
+            last_valid_idx = cost_ars.last_valid_index()
+            if last_valid_idx is not None:
+                fwd = cost_ars.index[cost_ars.index > last_valid_idx]
+                for d in fwd:
+                    prev = cost_ars.index[cost_ars.index < d][-1]
+                    cost_ars.loc[d] = cost_ars.loc[prev] * (cac.loc[d] / cac.loc[prev])
+            # Huecos hacia atrás (si el CSV se extiende a fechas previas al ICC)
+            first_valid_idx = cost_ars.first_valid_index()
+            if first_valid_idx is not None:
+                bwd = cost_ars.index[cost_ars.index < first_valid_idx][::-1]
+                for d in bwd:
+                    nxt = cost_ars.index[cost_ars.index > d][0]
+                    cost_ars.loc[d] = cost_ars.loc[nxt] * (cac.loc[d] / cac.loc[nxt])
+    else:
+        # Default (comportamiento original): CAC CAMARCO directamente
+        cost_ars = df[CAC_COL]
 
-    # Serie de precio para el rebase: ZonaProp ESTRENAR puro
-    df["precio_usd"] = df[ZP_COL].copy()
+    # Dolarizar costo (ratio de rebase, no precio real en u$s/m2)
+    if tc_col not in df.columns:
+        raise ValueError(f"Columna de TC '{tc_col}' no encontrada en combinadas.csv")
+    df["CAC_USD"] = cost_ars / df[tc_col]
+
+    # Serie de precio para el rebase
+    if precio_col not in df.columns:
+        raise ValueError(f"Columna de precio '{precio_col}' no encontrada en combinadas.csv")
+    df["precio_usd"] = df[precio_col].copy()
 
     return df
 
