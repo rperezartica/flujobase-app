@@ -17,6 +17,30 @@ AZUL_MED    = "#2E86AB"
 VIOLETA     = "#8E44AD"
 GRIS_LINEA  = "#DDDDDD"
 
+# Opciones de serie de precio (label → columna en combinadas.csv)
+PRECIO_OPCIONES = {
+    "ZP ESTRENAR":                "ZonaProp.ESTRENAR",
+    "ZP POZO":                    "ZonaProp.POZO",
+    "ZP USADO":                   "ZonaProp.USADO",
+    "ZP INDEX CABA":              "ZonaProp.INDEX CABA",
+    "Remax-UCEMA (desde 2020)":   "Índice Remax.Valor M2 (USD)",
+    "Remax empalmada INDEX CABA": "REMAX_EMPALMADA",
+}
+
+# Opciones de serie de costo
+COSTO_OPCIONES = {
+    "Apymeco / CAC CAMARCO": "cac_camarco",
+    "ICC INDEC":              "icc_indec",
+}
+
+# Opciones de tipo de cambio para dolarizar costos
+TC_OPCIONES = {
+    "CCL":         "CCL_Yahoo_Sintetico",
+    "MEP":         "MEP_Bolsa",
+    "Oficial BNA": "Oficial_BNA",
+    "Blue":        "Blue_Venta",
+}
+
 
 def render_sidebar():
     """Renderiza el sidebar global y devuelve un dict con los parámetros."""
@@ -61,12 +85,49 @@ def render_sidebar():
         )
 
         st.divider()
-        st.caption("Datos: **jun-2026**  |  Serie: ZonaProp ESTRENAR")
+        st.subheader("📈 Series de mercado")
+
+        precio_serie_label = st.selectbox(
+            "Serie de precio de venta",
+            options=list(PRECIO_OPCIONES.keys()),
+            index=0,
+            key="precio_serie_label",
+            help="Índice de referencia para el rebase del precio de venta.",
+        )
+
+        costo_serie_label = st.selectbox(
+            "Serie de costo de construcción",
+            options=list(COSTO_OPCIONES.keys()),
+            index=0,
+            key="costo_serie_label",
+            help="Apymeco/CAC CAMARCO: serie del caso UCEMA. "
+                 "ICC INDEC: metodología actual INDEC, base nov-2015=100.",
+        )
+
+        tc_label = st.selectbox(
+            "Tipo de cambio para dolarizar costos",
+            options=list(TC_OPCIONES.keys()),
+            index=0,
+            key="tc_label",
+            help="Tipo de cambio usado para convertir el índice de costo de pesos a dólares.",
+        )
+
+        st.divider()
+        st.info(
+            "**Nota IPC USA:** las series de precios y costos están expresadas en "
+            "dólares nominales (no ajustadas por inflación USD). La serie IPC USA "
+            "está disponible en la hoja Series del Excel pero no se aplica a los "
+            "gráficos de esta app en la versión actual."
+        )
+        st.caption("Datos: **jun-2026**")
 
     return {
-        "precio_base": precio_base,
-        "costo_base": costo_base,
-        "tasa_precio": tasa_precio_pct / 100.0,
-        "tasa_costo": tasa_costo_pct / 100.0,
-        "tir_objetivo": tir_pct / 100.0,
+        "precio_base":   precio_base,
+        "costo_base":    costo_base,
+        "tasa_precio":   tasa_precio_pct / 100.0,
+        "tasa_costo":    tasa_costo_pct / 100.0,
+        "tir_objetivo":  tir_pct / 100.0,
+        "precio_col":    PRECIO_OPCIONES[precio_serie_label],
+        "costo_serie":   COSTO_OPCIONES[costo_serie_label],
+        "tc_col":        TC_OPCIONES[tc_label],
     }

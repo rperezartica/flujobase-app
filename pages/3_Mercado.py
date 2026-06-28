@@ -18,7 +18,7 @@ from utils import render_sidebar, ROJO, VERDE, NARANJA, AZUL_MED, VIOLETA, AZUL_
 from motor_v3_backtest import cargar_y_preparar_series, construir_anclas, CCL_COL
 
 st.set_page_config(page_title="Mercado | FlujoBase", layout="wide")
-render_sidebar()
+params = render_sidebar()
 
 st.title("📈 Mercado — Trayectorias Históricas")
 st.caption("Datos mensuales desde ene-2016 hasta jun-2026. Sin proyección — solo datos históricos observados.")
@@ -29,8 +29,8 @@ st.caption("Datos mensuales desde ene-2016 hasta jun-2026. Sin proyección — s
 # ============================================================
 
 @st.cache_data(show_spinner="Cargando datos de mercado...")
-def load_market_data():
-    df = cargar_y_preparar_series()
+def load_market_data(tc_col="CCL_Yahoo_Sintetico", precio_col="ZonaProp.ESTRENAR"):
+    df = cargar_y_preparar_series(tc_col=tc_col, precio_col=precio_col)
     _, precio_anchor, _, _ = construir_anclas(df)
 
     df["costo_usd"] = df["Apymeco_ARS"] / df[CCL_COL]
@@ -44,7 +44,9 @@ def load_market_data():
     return df, precio_anchor
 
 
-df, precio_anchor = load_market_data()
+df, precio_anchor = load_market_data(
+    tc_col=params["tc_col"], precio_col=params["precio_col"]
+)
 
 # Series limpias (histórico, sin NaN)
 precio_ser = df["precio_usd"].dropna()

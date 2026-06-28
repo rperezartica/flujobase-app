@@ -78,9 +78,14 @@ mes_inicio = pd.Timestamp(mes_label)
 # ============================================================
 
 @st.cache_data(show_spinner="Calculando flujo de caja...")
-def compute_flujo(mes_inicio_str, tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo):
+def compute_flujo(
+    mes_inicio_str, tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
+    tc_col="CCL_Yahoo_Sintetico", costo_serie="cac_camarco", precio_col="ZonaProp.ESTRENAR",
+):
     mes_inicio = pd.Timestamp(mes_inicio_str)
-    df_raw = cargar_y_preparar_series()
+    df_raw = cargar_y_preparar_series(
+        tc_col=tc_col, costo_serie=costo_serie, precio_col=precio_col
+    )
     cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px = construir_anclas(df_raw)
 
     params_motor = {"tasa_precio_anual": tasa_precio, "tasa_cac_usd_anual": tasa_costo}
@@ -166,6 +171,9 @@ result, terreno, trayectorias, detalle = compute_flujo(
     params["tasa_precio"], params["tasa_costo"],
     params["precio_base"], params["costo_base"],
     params["tir_objetivo"],
+    tc_col=params["tc_col"],
+    costo_serie=params["costo_serie"],
+    precio_col=params["precio_col"],
 )
 
 if result is None:

@@ -36,15 +36,73 @@ st.caption(
     "La zona sombreada usa proyección con las tasas del sidebar."
 )
 
+# ============================================================
+# ESCENARIOS DE PROYECCIÓN FUTURA (editables en sidebar-like expander)
+# ============================================================
+with st.expander("⚙️ Parámetros de escenarios futuros", expanded=False):
+    st.caption(
+        "Ajustá las tasas anuales para cada escenario. "
+        "Los valores por defecto replican el análisis original."
+    )
+    col_a, col_b, col_c, col_d = st.columns(4)
+
+    with col_a:
+        st.markdown("**Optimista**")
+        opt_precio = st.slider("Precio %", -20, 40, 20, 1, key="opt_precio")
+        opt_costo  = st.slider("Costo %",  -10, 30,  2, 1, key="opt_costo")
+    with col_b:
+        st.markdown("**Base**")
+        base_precio = st.slider("Precio %", -20, 40, 15, 1, key="base_precio")
+        base_costo  = st.slider("Costo %",  -10, 30,  5, 1, key="base_costo")
+    with col_c:
+        st.markdown("**Pesimista**")
+        pes_precio = st.slider("Precio %", -20, 40,  5, 1, key="pes_precio")
+        pes_costo  = st.slider("Costo %",  -10, 30, 10, 1, key="pes_costo")
+    with col_d:
+        st.markdown("**Estático**")
+        est_precio = st.slider("Precio %", -20, 40,  0, 1, key="est_precio")
+        est_costo  = st.slider("Costo %",  -10, 30,  0, 1, key="est_costo")
+
+ESCENARIOS_FIJOS = [
+    {
+        "nombre": f"Optimista (+{opt_precio}%p / +{opt_costo}%c)",
+        "tasa_precio": opt_precio / 100.0,
+        "tasa_costo":  opt_costo  / 100.0,
+        "color":       VERDE,
+    },
+    {
+        "nombre": f"Base (+{base_precio}%p / +{base_costo}%c)",
+        "tasa_precio": base_precio / 100.0,
+        "tasa_costo":  base_costo  / 100.0,
+        "color":       AZUL_MED,
+    },
+    {
+        "nombre": f"Pesimista (+{pes_precio}%p / +{pes_costo}%c)",
+        "tasa_precio": pes_precio / 100.0,
+        "tasa_costo":  pes_costo  / 100.0,
+        "color":       NARANJA,
+    },
+    {
+        "nombre": f"Estático ({est_precio}%p / {est_costo}%c)",
+        "tasa_precio": est_precio / 100.0,
+        "tasa_costo":  est_costo  / 100.0,
+        "color":       VIOLETA,
+    },
+]
 
 # ============================================================
 # CÓMPUTO CACHEADO
 # ============================================================
 
 @st.cache_data(show_spinner="Calculando backtest (puede tomar 15-30 seg la primera vez)...")
-def compute_backtest(tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo):
+def compute_backtest(
+    tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
+    tc_col, costo_serie, precio_col,
+):
     """Backtest completo 2016 → 2029, con proyección hacia adelante."""
-    df_raw = cargar_y_preparar_series()
+    df_raw = cargar_y_preparar_series(
+        tc_col=tc_col, costo_serie=costo_serie, precio_col=precio_col
+    )
     cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px = construir_anclas(df_raw)
 
     params_motor = {"tasa_precio_anual": tasa_precio, "tasa_cac_usd_anual": tasa_costo}
@@ -96,16 +154,65 @@ def compute_backtest(tasa_precio, tasa_costo, precio_base, costo_base, tir_objet
 
 
 @st.cache_data(show_spinner=False)
-def compute_escenario_fijo(tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo):
-    """Backtest de un escenario fijo — solo la porción proyectada."""
-    return compute_backtest(tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo)
+def compute_escenario_fijo(
+    tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
+    tc_col, costo_serie, precio_col,
+):
+    return compute_backtest(
+        tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
+        tc_col, costo_serie, precio_col,
+    )
 
 
-# Escenario del usuario
+@st.cache_data(show_spinner=False)
+def compute_hipotetico(
+    tasa_precio, tasa_costo, precio_base, costo_base, tir_objetivo,
+    tc_col, costo_serie, precio_col,
+):
+    """Escenario hipotético: aplica tasas constantes a TODO el período (histórico + proyectado)."""
+    df_raw = cargar_y_preparar_series(
+        tc_col=tc_col, costo_serie=costo_serie, precio_col=precio_col
+    )
+    cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px = construir_anclas(df_raw)
+
+    params_motor = {"tasa_precio_anual": tasa_precio, "tasa_cac_usd_anual": tasa_costo}
+    df_ext = extender_con_proyeccion(
+        df_raw, cac_anchor, precio_anchor, fecha_ult_cac, fecha_ult_px,
+        params=params_motor, horizonte_meses=60,
+    )
+
+    fecha_min = df_raw["precio_usd"].dropna().index.min()
+    # El hipotético corre en todo el rango histórico + proyectado
+    fecha_hasta = pd.Timestamp("2029-06-01")
+    meses_inicio = pd.date_range(fecha_min, fecha_hasta, freq="MS")
+
+    rows = []
+    for start in meses_inicio:
+        tray = trayectoria_mensual(
+            df_ext, start, cac_anchor, precio_anchor,
+            precio_base=precio_base, costo_base=costo_base,
+        )
+        if tray is None:
+            continue
+        costo_m, precio_m = tray
+        try:
+            r = resolver_terreno_max(costo_m, precio_m, tir_objetivo=tir_objetivo)
+        except RuntimeError:
+            continue
+        rows.append({
+            "mes_inicio": start,
+            "terreno_max_usd": r["terreno"] * 1000,
+        })
+
+    return pd.DataFrame(rows)
+
+
+# --- Escenario del usuario (parámetros del sidebar) ---
 df_res = compute_backtest(
     params["tasa_precio"], params["tasa_costo"],
     params["precio_base"], params["costo_base"],
     params["tir_objetivo"],
+    params["tc_col"], params["costo_serie"], params["precio_col"],
 )
 
 if df_res.empty:
@@ -180,35 +287,92 @@ if len(df_proj) > 0:
         hovertemplate="<b>%{x|%b %Y}</b><br>Terreno (proyec.): u$s %{y:.2f}M<extra></extra>",
     ))
 
-# Escenarios de comparación (expandible)
-with st.expander("Mostrar escenarios de comparación"):
-    show_opt = st.checkbox("Optimista (+20%p / +2%c)", value=True)
-    show_pes = st.checkbox("Pesimista (+5%p / +10%c)", value=True)
-
-for show, tp2, tc2, color, name in [
-    (show_opt if "show_opt" in dir() else True, 0.20, 0.02, VERDE, "Optimista (+20%p / +2%c)"),
-    (show_pes if "show_pes" in dir() else True, 0.05, 0.10, NARANJA, "Pesimista (+5%p / +10%c)"),
-]:
-    if show:
-        df_esc = compute_escenario_fijo(
-            tp2, tc2, params["precio_base"], params["costo_base"], params["tir_objetivo"]
+# ============================================================
+# ESCENARIOS DE COMPARACIÓN (fijos)
+# ============================================================
+with st.expander("Mostrar escenarios de proyección"):
+    show_flags = {}
+    cols_esc = st.columns(len(ESCENARIOS_FIJOS))
+    for i, esc in enumerate(ESCENARIOS_FIJOS):
+        show_flags[esc["nombre"]] = cols_esc[i].checkbox(
+            esc["nombre"], value=(i < 2), key=f"show_esc_{i}"
         )
-        df_esc_proj = df_esc[df_esc["meses_proyectados"] > 0].copy()
-        if len(df_esc_proj) > 0:
-            anchor2 = df_hist.iloc[[-1]] if len(df_hist) > 0 else pd.DataFrame()
-            df_esc_plot = (
-                pd.concat([anchor2[["mes_inicio", "terreno_max_usd"]], df_esc_proj[["mes_inicio", "terreno_max_usd"]]])
-                .drop_duplicates("mes_inicio")
-                .sort_values("mes_inicio")
-            )
-            fig.add_trace(go.Scatter(
-                x=df_esc_plot["mes_inicio"],
-                y=df_esc_plot["terreno_max_usd"] / 1e6,
-                mode="lines",
-                name=name,
-                line=dict(color=color, width=1.8, dash="dot"),
-                hovertemplate="<b>%{x|%b %Y}</b><br>" + name + ": u$s %{y:.2f}M<extra></extra>",
-            ))
+
+for esc in ESCENARIOS_FIJOS:
+    if not show_flags.get(esc["nombre"], False):
+        continue
+    df_esc = compute_escenario_fijo(
+        esc["tasa_precio"], esc["tasa_costo"],
+        params["precio_base"], params["costo_base"],
+        params["tir_objetivo"],
+        params["tc_col"], params["costo_serie"], params["precio_col"],
+    )
+    df_esc_proj = df_esc[df_esc["meses_proyectados"] > 0].copy()
+    if len(df_esc_proj) > 0:
+        anchor2 = df_hist.iloc[[-1]] if len(df_hist) > 0 else pd.DataFrame()
+        df_esc_plot = (
+            pd.concat([anchor2[["mes_inicio", "terreno_max_usd"]],
+                       df_esc_proj[["mes_inicio", "terreno_max_usd"]]])
+            .drop_duplicates("mes_inicio")
+            .sort_values("mes_inicio")
+        )
+        fig.add_trace(go.Scatter(
+            x=df_esc_plot["mes_inicio"],
+            y=df_esc_plot["terreno_max_usd"] / 1e6,
+            mode="lines",
+            name=esc["nombre"],
+            line=dict(color=esc["color"], width=1.8, dash="dot"),
+            hovertemplate="<b>%{x|%b %Y}</b><br>" + esc["nombre"] + ": u$s %{y:.2f}M<extra></extra>",
+        ))
+
+# ============================================================
+# ESCENARIOS HIPOTÉTICOS (sección 4)
+# ============================================================
+HIPOT_COLORES = ["#E74C3C", "#3498DB", "#2ECC71"]
+
+with st.expander("➕ Agregar escenarios hipotéticos"):
+    st.caption(
+        "Cada escenario aplica tasas constantes a **todo** el período histórico + proyectado. "
+        "Permite preguntar: '¿qué hubiera valido el terreno si siempre se asumiera X% de crecimiento?'"
+    )
+    hipot_configs = []
+    h_cols = st.columns(3)
+    for i in range(3):
+        with h_cols[i]:
+            activo = st.checkbox(f"Activar escenario {i + 1}", key=f"hip_activo_{i}")
+            if activo:
+                nombre = st.text_input(
+                    "Nombre", value=f"Hipotético {i + 1}", key=f"hip_nombre_{i}"
+                )
+                hp = st.slider("Precio %", -10, 40, 10, 1, key=f"hip_precio_{i}")
+                hc = st.slider("Costo %",  -10, 40,  5, 1, key=f"hip_costo_{i}")
+                hipot_configs.append({
+                    "nombre": nombre,
+                    "tasa_precio": hp / 100.0,
+                    "tasa_costo":  hc / 100.0,
+                    "color":       HIPOT_COLORES[i],
+                })
+
+for hcfg in hipot_configs:
+    df_hip = compute_hipotetico(
+        hcfg["tasa_precio"], hcfg["tasa_costo"],
+        params["precio_base"], params["costo_base"],
+        params["tir_objetivo"],
+        params["tc_col"], params["costo_serie"], params["precio_col"],
+    )
+    if not df_hip.empty:
+        fig.add_trace(go.Scatter(
+            x=df_hip["mes_inicio"],
+            y=df_hip["terreno_max_usd"] / 1e6,
+            mode="lines",
+            name=hcfg["nombre"],
+            line=dict(color=hcfg["color"], width=1.4, dash="dot"),
+            opacity=0.5,
+            hovertemplate=(
+                "<b>%{x|%b %Y}</b><br>"
+                + hcfg["nombre"] + ": u$s %{y:.2f}M<extra></extra>"
+            ),
+        ))
 
 # Línea de referencia: caso UCEMA
 fig.add_hline(
