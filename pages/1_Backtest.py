@@ -126,7 +126,9 @@ def compute_backtest(
         costo_m, precio_m = tray
         try:
             r = resolver_terreno_max(costo_m, precio_m, tir_objetivo=tir_objetivo)
-        except RuntimeError:
+        except (RuntimeError, ValueError):
+            # Mes inviable: ni con terreno gratis se alcanza la TIR objetivo
+            # (brentq no encuentra bracket con cambio de signo). Se omite.
             continue
 
         fechas_proy = pd.date_range(start, periods=N_MESES + 1, freq="MS")
@@ -219,7 +221,9 @@ def compute_hipotetico(
 
         try:
             r = resolver_terreno_max(costo_m, precio_m, tir_objetivo=tir_objetivo)
-        except RuntimeError:
+        except (RuntimeError, ValueError):
+            # Mes inviable: ni con terreno gratis se alcanza la TIR objetivo
+            # (brentq no encuentra bracket con cambio de signo). Se omite.
             continue
         rows.append({
             "mes_inicio": start,
