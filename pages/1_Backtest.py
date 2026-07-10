@@ -442,6 +442,82 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
+# EXPORTAR DATOS DEL GRÁFICO (CSV para Datawrapper)
+# ============================================================
+st.subheader("⬇️ Exportar datos del gráfico")
+st.caption(
+    "Formato ancho (una columna por serie, valores en **millones de u$s**), listo "
+    "para importar en Datawrapper. Incluye la serie histórica y **todos** los "
+    "escenarios de proyección, estén o no visibles en el gráfico."
+)
+
+
+def _serie_export(df, col="terreno_max_usd"):
+    """Serie indexada por mes de inicio, en millones de u$s."""
+    return pd.Series(
+        (df[col] / 1e6).values,
+        index=pd.to_datetime(df["mes_inicio"].values),
+    )
+
+
+export_series = {}
+
+# 1. Serie histórica (dinámico)
+if len(df_hist) > 0:
+    export_series["Dinámico histórico"] = _serie_export(df_hist)
+
+# 2. Escenario del usuario (proyección + punto de empalme)
+if len(df_proj) > 0:
+    tp = int(params["tasa_precio"] * 100)
+    tc = int(params["tasa_costo"] * 100)
+    export_series[f"Escenario usuario (+{tp}%p / +{tc}%c)"] = _serie_export(df_dashed)
+
+# 3. Los 4 escenarios fijos (SIEMPRE, estén tildados o no) — proyección + empalme
+anchor_exp = df_hist.iloc[[-1]] if len(df_hist) > 0 else pd.DataFrame()
+for esc in ESCENARIOS_FIJOS:
+    df_esc = compute_escenario_fijo(
+        esc["tasa_precio"], esc["tasa_costo"],
+        params["precio_base"], params["costo_base"],
+        params["tir_objetivo"],
+        params["tc_col"], params["costo_serie"], params["precio_col"],
+    )
+    df_esc_proj = df_esc[df_esc["meses_proyectados"] > 0].copy()
+    if len(df_esc_proj) > 0:
+        df_esc_plot = (
+            pd.concat([anchor_exp[["mes_inicio", "terreno_max_usd"]],
+                       df_esc_proj[["mes_inicio", "terreno_max_usd"]]])
+            .drop_duplicates("mes_inicio")
+            .sort_values("mes_inicio")
+        )
+        export_series[esc["nombre"]] = _serie_export(df_esc_plot)
+
+# 4. Escenarios hipotéticos activados (cubren todo el período)
+for hcfg in hipot_configs:
+    df_hip = compute_hipotetico(
+        hcfg["tasa_precio"], hcfg["tasa_costo"],
+        params["precio_base"], params["costo_base"],
+        params["tir_objetivo"],
+        params["tc_col"], params["costo_serie"], params["precio_col"],
+    )
+    if not df_hip.empty:
+        export_series[hcfg["nombre"]] = _serie_export(df_hip)
+
+if export_series:
+    df_export = pd.DataFrame(export_series).sort_index().round(4)
+    df_export.index.name = "Mes"
+    csv_bytes = df_export.to_csv(date_format="%Y-%m-%d").encode("utf-8")
+    st.download_button(
+        "📥 Descargar CSV para Datawrapper",
+        data=csv_bytes,
+        file_name="oferta_max_terreno_datawrapper.csv",
+        mime="text/csv",
+    )
+    with st.expander("Vista previa de la tabla a exportar"):
+        st.dataframe(df_export)
+else:
+    st.info("No hay datos para exportar.")
+
+# ============================================================
 # TABLA RESUMEN DEL MES SELECCIONADO
 # ============================================================
 st.subheader(f"Resumen · {mes_seleccionado_str}")
