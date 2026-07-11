@@ -446,13 +446,13 @@ fig.update_layout(
 st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
-# EXPORTAR DATOS DEL GRÁFICO (CSV para Datawrapper)
+# EXPORTAR DATOS DEL GRÁFICO (CSV)
 # ============================================================
 st.subheader("⬇️ Exportar datos del gráfico")
 st.caption(
-    "Formato ancho (una columna por serie, valores en **millones de u$s**), listo "
-    "para importar en Datawrapper. Incluye la serie histórica y **todos** los "
-    "escenarios de proyección, estén o no visibles en el gráfico."
+    "Formato ancho (una columna por serie, valores en **millones de u$s**). "
+    "Incluye la serie histórica y **todos** los escenarios de proyección, "
+    "estén o no visibles en el gráfico."
 )
 
 
@@ -511,9 +511,9 @@ if export_series:
     df_export.index.name = "Mes"
     csv_bytes = df_export.to_csv(date_format="%Y-%m-%d").encode("utf-8")
     st.download_button(
-        "📥 Descargar CSV para Datawrapper",
+        "📥 Descargar CSV",
         data=csv_bytes,
-        file_name="oferta_max_terreno_datawrapper.csv",
+        file_name="oferta_max_terreno.csv",
         mime="text/csv",
     )
     with st.expander("Vista previa de la tabla a exportar"):
