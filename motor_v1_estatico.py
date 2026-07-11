@@ -1,8 +1,11 @@
 """
 Motor de valuación de terreno - Caso Integrador UCEMA
-Paso 1: réplica del caso ESTÁTICO (precio/costo fijos), para validar
-contra la respuesta conocida del Excel original (Terreno = u$s 7.254.454,
-TIR = 25.00%).
+Paso 1: réplica del caso ESTÁTICO (precio/costo fijos), calibrada contra la
+planilla del profesor "sin permuta" (convención de crédito cancelado en
+bloque al fin de obra y honorarios lump en el mes 1). A TIR 25.00% exacta
+da Terreno = u$s 7.135.526; la planilla del profesor reporta u$s 7.128.890
+porque su solver quedó en TIR 25.02% (mismo modelo, distinta precisión del
+objetivo).
 """
 import numpy as np
 import numpy_financial as npf
@@ -157,9 +160,12 @@ def simular_flujo(terreno, costo_unit_mensual, precio_unit_mensual):
     notariales_base_mes = escritura_sola_mes  # base (15%) para gastos notariales
 
     # --- Honorarios profesionales ---
+    # El lump del 60% se paga en el mes 1 (convención planilla profesor
+    # "sin permuta"), no en el mes 0. Se asigna la parte recurrente primero
+    # y luego se suma el lump para no pisarla.
     honorarios_mes = np.zeros(37)
-    honorarios_mes[0] = costo_total * HONOR_PCT * 0.6
     honorarios_mes[1:19] = costo_total * HONOR_PCT * 0.4 * AVANCE_OBRA[1:19]
+    honorarios_mes[1] += costo_total * HONOR_PCT * 0.6
 
     # --- Gastos varios y contingencias ---
     gastos_varios_mes = costo_total * GASTOS_VARIOS_PCT * AVANCE_OBRA
@@ -185,17 +191,22 @@ def simular_flujo(terreno, costo_unit_mensual, precio_unit_mensual):
     )
 
     # --- Crédito bancario ---
+    # Convención planilla profesor "sin permuta": el préstamo se acumula
+    # durante la obra y se cancela en un solo bloque al fin de obra (mes
+    # PLAZO_OBRA). El interés de cada mes se computa sobre el saldo ANTES de
+    # cancelar (por eso en el mes de cancelación se cobra interés sobre el
+    # saldo completo y recién después se devuelve todo).
     desembolso_mes = costo_construccion_mes * PCT_CREDITO
     devolucion_mes = np.zeros(37)
     interes_mes = np.zeros(37)
     saldo_credito = 0.0
-    cobros_entrega_mes = entrega_mes + escritura_sola_mes  # posesión + escritura
 
     for m in range(37):
         saldo_disponible = saldo_credito + desembolso_mes[m]
-        devolucion_mes[m] = min(saldo_disponible, cobros_entrega_mes[m])
+        interes_mes[m] = saldo_disponible * TNM        # interés sobre saldo pre-cancelación
+        if m == PLAZO_OBRA:                            # mes 18: cancela todo el saldo de una
+            devolucion_mes[m] = saldo_disponible
         saldo_credito = saldo_disponible - devolucion_mes[m]
-        interes_mes[m] = saldo_credito * TNM
 
     # --- Aporte de capital ---
     aporte_capital_mes = -(
@@ -249,12 +260,12 @@ if __name__ == "__main__":
 
     resultado = resolver_terreno_max(costo_unit_fijo, precio_unit_fijo)
 
-    print("=== VALIDACIÓN CONTRA CASO ORIGINAL ===")
+    print("=== VALIDACIÓN CONTRA PLANILLA PROFESOR (sin permuta) ===")
     print(f"Terreno (Python):     u$s {resultado['terreno']*1000:,.0f}")
-    print(f"Terreno (Excel orig): u$s 7,254,454")
+    print(f"Terreno (profe):      u$s 7,128,890  (a TIR 25.02%; a 25.00% exacta: 7,135,526)")
     print(f"TIR anual:            {resultado['tir_anual']*100:.4f}%  (target 25.00%)")
-    print(f"Rentabilidad s/Cap:   {resultado['rentabilidad']*100:.2f}%  (Excel orig: 56.49%)")
+    print(f"Rentabilidad s/Cap:   {resultado['rentabilidad']*100:.2f}%  (profe: 57.17%)")
     print(f"Margen Bruto:         {resultado['margen_bruto']:,.2f} (miles u$s)")
     print(f"Máx exposición cap:   {resultado['max_exposicion']:,.2f} (miles u$s)")
-    print(f"Monto total ventas:   {resultado['monto_total_ventas']:,.2f} (Excel orig: 68,640.00)")
-    print(f"Costo total constr.:  {resultado['costo_total']:,.2f} (Excel orig: 41,724.80)")
+    print(f"Monto total ventas:   {resultado['monto_total_ventas']:,.2f} (profe: 68,640.00)")
+    print(f"Costo total constr.:  {resultado['costo_total']:,.2f} (profe: 41,724.80)")
