@@ -240,12 +240,25 @@ def resolver_terreno_max(costo_unit_mensual, precio_unit_mensual, tir_objetivo=T
         r = simular_flujo(terreno, costo_unit_mensual, precio_unit_mensual)
         return r["tir_anual"] - tir_objetivo
 
-    # Buscar un bracket razonable
+    # Buscar un bracket razonable. La TIR es decreciente en el terreno, así
+    # que el máximo terreno es la raíz de f. En meses con costos en USD muy
+    # bajos, la TIR a terreno≈0 puede dar NaN (flujo degenerado, sin aporte de
+    # capital); en ese caso se sube el extremo inferior hasta que sea finita,
+    # para no perder el mes (antes brentq moría con "f(0) is NaN").
     lo, hi = 0.0, 50000.0
+    if not np.isfinite(f(lo)):
+        lo = 1.0
+        while not np.isfinite(f(lo)) and lo < hi:
+            lo *= 2
+
     while f(hi) > 0:
         hi *= 1.5
         if hi > 1e7:
             raise RuntimeError("No se encontró bracket válido")
+
+    # Sin cambio de signo no hay raíz: proyecto infactible a esa TIR objetivo.
+    if not (f(lo) > 0 and f(hi) < 0):
+        raise RuntimeError("No se encontró bracket válido (proyecto infactible)")
 
     terreno = brentq(f, lo, hi, xtol=1e-3)
     resultado = simular_flujo(terreno, costo_unit_mensual, precio_unit_mensual)
