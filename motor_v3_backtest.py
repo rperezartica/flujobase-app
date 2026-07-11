@@ -813,7 +813,10 @@ if __name__ == "__main__":
     print(f"Ventana: {df_res['mes_inicio'].min().date()} → {df_res['mes_inicio'].max().date()}")
     print(f"\nOferta máxima de terreno (u$s):")
     print(df_res["terreno_max_usd"].describe())
-    print(f"\nCaso base hoy (jun-2026): u$s 7,254,454")
+    _base_row = df_res[df_res["mes_inicio"] == pd.Timestamp("2026-06-01")]
+    if not _base_row.empty:
+        print(f"\nCaso base hoy (jun-2026): u$s {_base_row['terreno_max_usd'].iloc[0]:,.0f}"
+              f"  (benchmark planilla profesor: 7,128,890)")
 
     # Meses con proyección parcial (inicio 2022+ tienen 36 meses que se extienden a 2025-2026)
     con_proyeccion = df_res[df_res["meses_proyectados"] > 0]

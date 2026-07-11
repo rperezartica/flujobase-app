@@ -400,11 +400,11 @@ for hcfg in hipot_configs:
             ),
         ))
 
-# Línea de referencia: caso UCEMA
+# Línea de referencia: caso UCEMA (planilla profesor "sin permuta", TIR 25,02%)
 fig.add_hline(
-    y=7.254454,
+    y=7.128890,
     line_dash="longdash", line_color="#888888", line_width=1.2,
-    annotation_text="Caso UCEMA base: u$s 7.25M",
+    annotation_text="Caso UCEMA base: u$s 7.13M",
     annotation_position="bottom right",
     annotation_font_size=10,
     annotation_font_color="#888888",
