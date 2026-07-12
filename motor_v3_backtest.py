@@ -120,8 +120,13 @@ def cargar_y_preparar_series(
                  USADO_COL, POZO_COL]
     all_cols = base_cols + [c for c in extra_tc_cols + extra_px_cols if c not in base_cols]
     df = df[all_cols].set_index("Fecha").sort_index()
-    df = df.rename(columns={APY_COL_GLOBAL: "Apymeco_ARS", USADO_COL: "precio_usado",
-                             POZO_COL: "precio_pozo"})
+    df = df.rename(columns={APY_COL_GLOBAL: "Apymeco_ARS"})
+    # Alias de USADO/POZO como copias, SIN renombrar las columnas originales:
+    # así se pueden elegir como serie de precio (precio_col="ZonaProp.USADO"/POZO,
+    # como las ofrece el sidebar) y a la vez quedan disponibles como
+    # precio_usado/precio_pozo para los gráficos de spread.
+    df["precio_usado"] = df[USADO_COL]
+    df["precio_pozo"]  = df[POZO_COL]
 
     # --- Construir serie de costo en pesos ---
     if costo_serie == "icc_indec" and ICC_COL in df.columns:
