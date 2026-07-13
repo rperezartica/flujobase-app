@@ -71,7 +71,13 @@ spread_pz_hoy = float(spread_pz_ser.iloc[-1]) if len(spread_pz_ser) > 0 else flo
 # ============================================================
 
 def kde_traces(serie, hoy, color_kde, color_hoy, fmt=",.0f", prefix="u$s ", suffix=""):
-    """Genera lista de trazas Plotly para un panel KDE."""
+    """
+    Genera las trazas Plotly de un panel KDE.
+
+    Devuelve (traces, pct_hoy, df_curva, marcadores). df_curva es la curva
+    evaluada (x, densidad) lista para reconstruir el gráfico fuera de la app —
+    Datawrapper no estima densidades, necesita el par x/densidad ya computado.
+    """
     arr = serie.dropna().values
     kde = gaussian_kde(arr, bw_method="scott")
     x_min = arr.min() - 0.12 * (arr.max() - arr.min())
@@ -141,7 +147,27 @@ def kde_traces(serie, hoy, color_kde, color_hoy, fmt=",.0f", prefix="u$s ", suff
         hoverinfo="skip",
     ))
 
-    return traces, pct_hoy
+    # Curva exportable. "densidad_hasta_hoy" repite la densidad solo a la
+    # izquierda del valor actual: en Datawrapper se grafica como una segunda
+    # serie de área y reproduce el sombreado acumulado del panel.
+    df_curva = pd.DataFrame({
+        "x": x_grid,
+        "densidad": y_kde,
+        "densidad_hasta_hoy": np.where(x_grid <= hoy, y_kde, np.nan),
+    })
+
+    marcadores = {
+        "hoy": hoy,
+        "percentil_hoy": pct_hoy,
+        "p25": p25,
+        "p50": p50,
+        "p75": p75,
+        "n_obs": len(arr),
+        "min": float(arr.min()),
+        "max": float(arr.max()),
+    }
+
+    return traces, pct_hoy, df_curva, marcadores
 
 
 # ============================================================
@@ -352,6 +378,8 @@ paneles_kde = [
     },
 ]
 
+filas_marcadores = []
+
 for panel in paneles_kde:
     st.markdown(f"**{panel['titulo']}**")
     serie_k = df_kde[panel["key"]].dropna()
@@ -359,11 +387,12 @@ for panel in paneles_kde:
         st.warning("Datos insuficientes para KDE.")
         continue
 
-    traces_k, pct_k = kde_traces(
+    traces_k, pct_k, df_curva_k, marc_k = kde_traces(
         serie_k, panel["hoy"],
         panel["color_kde"], panel["color_hoy"],
         fmt=panel["fmt"], prefix=panel["prefix"], suffix=panel["suffix"],
     )
+    filas_marcadores.append({"panel": panel["titulo"], "unidad": panel["xlabel"], **marc_k})
 
     fig_k = go.Figure(data=traces_k)
     fig_k.update_layout(
@@ -377,6 +406,47 @@ for panel in paneles_kde:
         legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1),
     )
     st.plotly_chart(fig_k, use_container_width=True)
+
+    st.download_button(
+        "⬇️ Descargar curva (CSV)",
+        data=df_curva_k.to_csv(index=False, float_format="%.8g").encode("utf-8"),
+        file_name=f"kde_{panel['key']}.csv",
+        mime="text/csv",
+        key=f"dl_kde_{panel['key']}",
+        help="Curva de densidad evaluada (x, densidad) para graficar en Datawrapper "
+             "como área o línea. La columna densidad_hasta_hoy reproduce el sombreado "
+             "a la izquierda del valor actual.",
+    )
+
+# ============================================================
+# EXPORTACIÓN DE LAS DISTRIBUCIONES
+# ============================================================
+st.divider()
+st.subheader("Exportar distribuciones")
+st.caption(
+    "Las curvas se calculan con la serie de precio y el tipo de cambio elegidos en el "
+    "sidebar, así que los CSV corresponden exactamente a lo que se ve arriba."
+)
+
+col_dl1, col_dl2 = st.columns(2)
+
+col_dl1.download_button(
+    "⬇️ Marcadores de los 4 paneles (CSV)",
+    data=pd.DataFrame(filas_marcadores).to_csv(index=False, float_format="%.6g").encode("utf-8"),
+    file_name="kde_marcadores.csv",
+    mime="text/csv",
+    help="Valor de hoy, su percentil, cuartiles, mínimo, máximo y número de "
+         "observaciones de cada distribución. Sirve para anotar los gráficos.",
+)
+
+col_dl2.download_button(
+    "⬇️ Observaciones históricas (CSV)",
+    data=df_kde.to_csv(float_format="%.6g").encode("utf-8"),
+    file_name="series_historicas_mercado.csv",
+    mime="text/csv",
+    help="Las observaciones mensuales que alimentan las cuatro distribuciones "
+         "(precio, costo, ratio y spread), con su fecha.",
+)
 
 # ============================================================
 # MÉTRICAS ACTUALES
