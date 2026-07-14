@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from utils import render_sidebar, ROJO, VERDE, NARANJA, AZUL_MED, VIOLETA, AZUL_OSCURO, GRIS_LINEA
 from motor_v3_backtest import cargar_y_preparar_series, construir_anclas, CCL_COL
+from backtest_core import compute_backtest
 
 st.set_page_config(page_title="Mercado | FlujoBase", layout="wide")
 params = render_sidebar()
@@ -202,6 +203,101 @@ def kde_traces(serie, hoy, color_kde, color_hoy, fmt=",.0f", prefix="u$s ", suff
     }
 
     return traces, pct_hoy, df_curva, marcadores
+
+
+# ============================================================
+# HELPER: KDE de la oferta máxima de terreno (dos muestras)
+# ============================================================
+
+# Etiqueta de la variable especial: no sale de una columna de combinadas.csv sino
+# del backtest, y se grafica con dos densidades superpuestas en vez de una.
+TERRENO_LABEL = "Oferta máxima por el terreno"
+
+
+def kde_terreno_traces(serie_hist, serie_full, hoy, label_hist, label_full):
+    """
+    Dos densidades de la oferta máxima de terreno sobre una grilla común:
+
+    - serie_hist: meses de inicio cuyo flujo de 36 meses es 100% observado
+      (feb-2016 → may-2023). Distribución puramente empírica.
+    - serie_full: todos los meses de inicio hasta hoy (feb-2016 → jun-2026). Los
+      últimos completan su flujo con la proyección del escenario base, así que su
+      cola derecha depende de las tasas del sidebar, no solo del dato.
+
+    Se excluyen los meses de inicio futuros: no son "lo que se pudo haber hecho".
+
+    Devuelve (traces, df_curva, marcadores) — marcadores es una lista de dos
+    filas, una por muestra, para el CSV de anotaciones.
+    """
+    arr_h = serie_hist.dropna().values
+    arr_f = serie_full.dropna().values
+
+    kde_h = gaussian_kde(arr_h, bw_method="scott")
+    kde_f = gaussian_kde(arr_f, bw_method="scott")
+
+    lo = min(arr_h.min(), arr_f.min())
+    hi = max(arr_h.max(), arr_f.max())
+    x_grid = np.linspace(lo - 0.12 * (hi - lo), hi + 0.12 * (hi - lo), 400)
+    y_h, y_f = kde_h(x_grid), kde_f(x_grid)
+
+    pct_h = float((arr_h < hoy).mean() * 100)
+    pct_f = float((arr_f < hoy).mean() * 100)
+
+    traces = []
+    for y, color, nombre in [
+        (y_h, AZUL_MED, f"{label_hist} (n={len(arr_h)})"),
+        (y_f, NARANJA, f"{label_full} (n={len(arr_f)})"),
+    ]:
+        traces.append(go.Scatter(
+            x=x_grid, y=y,
+            mode="lines",
+            fill="tozeroy",
+            fillcolor=f"rgba({int(color[1:3], 16)},{int(color[3:5], 16)},{int(color[5:7], 16)},0.10)",
+            line=dict(color=color, width=2.2),
+            name=nombre,
+            hovertemplate="u$s %{x:,.0f}<extra></extra>",
+        ))
+
+    y_hoy = max(float(kde_h(np.array([hoy]))[0]), float(kde_f(np.array([hoy]))[0]))
+    traces.append(go.Scatter(
+        x=[hoy, hoy], y=[0, y_hoy],
+        mode="lines",
+        line=dict(color=ROJO, width=2),
+        name=f"Hoy: u$s {hoy:,.0f} (p{pct_h:.0f} hist. / p{pct_f:.0f} hasta hoy)",
+        hovertemplate=(
+            f"Hoy: u$s {hoy:,.0f}<br>Percentil {pct_h:.0f} ({label_hist})"
+            f"<br>Percentil {pct_f:.0f} ({label_full})<extra></extra>"
+        ),
+    ))
+
+    df_curva = pd.DataFrame({
+        "x": x_grid,
+        "densidad_historica": y_h,
+        "densidad_historica_hasta_hoy": np.where(x_grid <= hoy, y_h, np.nan),
+        "densidad_hasta_hoy_incl_proyeccion": y_f,
+        "densidad_hasta_hoy_incl_proyeccion_hasta_hoy": np.where(x_grid <= hoy, y_f, np.nan),
+    })
+
+    marcadores = [
+        {
+            "panel": f"{TERRENO_LABEL} — {label_hist}", "unidad": "u$s",
+            "hoy": hoy, "percentil_hoy": pct_h,
+            "p25": float(np.percentile(arr_h, 25)),
+            "p50": float(np.percentile(arr_h, 50)),
+            "p75": float(np.percentile(arr_h, 75)),
+            "n_obs": len(arr_h), "min": float(arr_h.min()), "max": float(arr_h.max()),
+        },
+        {
+            "panel": f"{TERRENO_LABEL} — {label_full}", "unidad": "u$s",
+            "hoy": hoy, "percentil_hoy": pct_f,
+            "p25": float(np.percentile(arr_f, 25)),
+            "p50": float(np.percentile(arr_f, 50)),
+            "p75": float(np.percentile(arr_f, 75)),
+            "n_obs": len(arr_f), "min": float(arr_f.min()), "max": float(arr_f.max()),
+        },
+    ]
+
+    return traces, df_curva, marcadores
 
 
 # ============================================================
@@ -440,6 +536,7 @@ DEFAULT_KDE = [
 ]
 
 opciones_kde = [k for k, v in CATALOGO_KDE.items() if v["col"] in df.columns]
+opciones_kde.append(TERRENO_LABEL)  # variable especial: sale del backtest, no de una columna
 
 vars_kde = st.multiselect(
     "Variables a graficar (hasta 5)",
@@ -459,7 +556,7 @@ if not vars_kde:
 PALETA_KDE = [AZUL_MED, NARANJA, VERDE, VIOLETA, AZUL_OSCURO]
 
 paneles_kde = []
-for i, nombre in enumerate(vars_kde):
+for i, nombre in enumerate(v for v in vars_kde if v != TERRENO_LABEL):
     meta = CATALOGO_KDE[nombre]
     paneles_kde.append({
         "key": meta["col"], "titulo": nombre, "xlabel": meta["xlabel"],
@@ -475,8 +572,10 @@ df_kde = df[[p["key"] for p in paneles_kde]]
 
 filas_marcadores = []
 slugs = {}
+fmt_por_panel = {}  # título → (prefix, fmt, suffix), para rotular las métricas
 
 for panel in paneles_kde:
+    fmt_por_panel[panel["titulo"]] = (panel["prefix"], panel["fmt"], panel["suffix"])
     st.markdown(f"**{panel['titulo']}**")
     serie_k = df_kde[panel["key"]].dropna()
     if len(serie_k) < 5:
@@ -519,6 +618,77 @@ for panel in paneles_kde:
              "a la izquierda del valor actual.",
     )
 
+# ------------------------------------------------------------
+# Panel especial: oferta máxima por el terreno (dos muestras)
+# ------------------------------------------------------------
+if TERRENO_LABEL in vars_kde:
+    st.markdown(f"**{TERRENO_LABEL}**")
+
+    df_bt = compute_backtest(
+        params["tasa_precio"], params["tasa_costo"],
+        params["precio_base"], params["costo_base"], params["tir_objetivo"],
+        params["tc_col"], params["costo_serie"], params["precio_col"],
+    )
+
+    # "Hoy" = último mes de inicio con dato, es decir el fin del histórico de
+    # combinadas. Los meses de inicio posteriores son escenarios futuros y quedan
+    # fuera de ambas muestras: no representan decisiones que se pudieron tomar.
+    hoy_mes = df.index.max()
+    hasta_hoy = df_bt[df_bt["mes_inicio"] <= hoy_mes]
+    serie_hist = hasta_hoy.loc[hasta_hoy["pct_historico"] == 1.0, "terreno_max_usd"]
+    serie_full = hasta_hoy["terreno_max_usd"]
+    fila_hoy = hasta_hoy[hasta_hoy["mes_inicio"] == hoy_mes]
+
+    if len(serie_hist) < 5 or fila_hoy.empty:
+        st.warning(
+            "No se puede estimar la distribución de la oferta de terreno con los "
+            "parámetros actuales (demasiados meses inviables a esta TIR objetivo)."
+        )
+    else:
+        label_hist = "Flujo 100% histórico"
+        label_full = "Todos los inicios hasta hoy"
+        traces_t, df_curva_t, marc_t = kde_terreno_traces(
+            serie_hist, serie_full,
+            float(fila_hoy["terreno_max_usd"].iloc[0]),
+            label_hist, label_full,
+        )
+        filas_marcadores.extend(marc_t)
+        for m in marc_t:
+            fmt_por_panel[m["panel"]] = ("u$s ", ",.0f", "")
+
+        fig_t = go.Figure(data=traces_t)
+        fig_t.update_layout(
+            xaxis=dict(title="u$s (oferta máxima por el terreno)", tickprefix="u$s "),
+            yaxis=dict(title="Densidad", showticklabels=False),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+            height=260,
+            margin=dict(t=20, b=40, l=40, r=20),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig_t, use_container_width=True)
+        mes_hist_max = hasta_hoy.loc[hasta_hoy["pct_historico"] == 1.0, "mes_inicio"].max()
+        st.caption(
+            f"**{label_hist}** (n={len(serie_hist)}): meses de inicio cuyo flujo de 36 meses "
+            f"cae entero dentro de datos observados, es decir hasta {mes_hist_max:%b-%Y}. "
+            f"Distribución puramente empírica. — **{label_full}** (n={len(serie_full)}): todos "
+            f"los meses de inicio hasta {hoy_mes:%b-%Y}; los más recientes completan su flujo "
+            "con la proyección del escenario base, así que esa curva depende de las tasas del "
+            "sidebar y no solo del dato observado. Los meses de inicio futuros quedan excluidos "
+            "de ambas muestras."
+        )
+
+        st.download_button(
+            "⬇️ Descargar curva (CSV)",
+            data=df_curva_t.to_csv(index=False, float_format="%.8g").encode("utf-8"),
+            file_name="kde_oferta_maxima_terreno.csv",
+            mime="text/csv",
+            key="dl_kde_terreno",
+            help="Las dos densidades sobre una grilla común, cada una con su versión "
+                 "acumulada hasta el valor de hoy.",
+        )
+
 # ============================================================
 # EXPORTACIÓN DE LAS DISTRIBUCIONES
 # ============================================================
@@ -559,11 +729,10 @@ if not filas_marcadores:
     st.stop()
 
 for fila, col in zip(filas_marcadores, st.columns(len(filas_marcadores))):
-    meta = CATALOGO_KDE[fila["panel"]]
-    valor = f"{meta['prefix']}{fila['hoy']:{meta['fmt']}}{meta['suffix']}"
+    prefix, fmt, suffix = fmt_por_panel[fila["panel"]]
     col.metric(
         fila["panel"],
-        valor,
+        f"{prefix}{fila['hoy']:{fmt}}{suffix}",
         delta=f"Percentil {fila['percentil_hoy']:.0f}°",
         delta_color="off",
     )
