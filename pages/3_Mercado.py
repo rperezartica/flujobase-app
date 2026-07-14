@@ -29,14 +29,37 @@ st.caption("Datos mensuales desde ene-2016 hasta jun-2026. Sin proyección — s
 # ============================================================
 
 @st.cache_data(show_spinner="Cargando datos de mercado...")
-def load_market_data(tc_col="CCL_Yahoo_Sintetico", precio_col="ZonaProp.ESTRENAR"):
-    df = cargar_y_preparar_series(tc_col=tc_col, precio_col=precio_col)
+def load_market_data(
+    tc_col="CCL_Yahoo_Sintetico",
+    precio_col="ZonaProp.ESTRENAR",
+    costo_serie="cac_camarco",
+):
+    df = cargar_y_preparar_series(
+        tc_col=tc_col, precio_col=precio_col, costo_serie=costo_serie
+    )
     _, precio_anchor, _, _ = construir_anclas(df)
 
-    df["costo_usd"] = df["Apymeco_ARS"] / df[CCL_COL]
+    # Costo en u$s/m2 (nivel real, no índice). Apymeco es la única serie de costo
+    # que viene en $/m2; el ICC INDEC es un índice base nov-2015=100 y no tiene
+    # nivel propio. Por eso, con ICC se ancla el nivel al último Apymeco dolarizado
+    # y se reconstruye la historia hacia atrás con la dinámica del ICC en dólares
+    # (df["CAC_USD"] ya es la serie de costo elegida, dolarizada y con los huecos
+    # cubiertos por el motor). Con CAC/Apymeco, el costo es Apymeco/TC directo.
+    apymeco_usd = df["Apymeco_ARS"] / df[tc_col]
+    if costo_serie == "icc_indec":
+        validos = apymeco_usd.notna() & df["CAC_USD"].notna()
+        ancla = apymeco_usd[validos].index[-1]
+        df["costo_usd"] = apymeco_usd.loc[ancla] * (df["CAC_USD"] / df["CAC_USD"].loc[ancla])
+    else:
+        df["costo_usd"] = apymeco_usd
+
     df["ratio"] = df["precio_usd"] / df["costo_usd"]
+    # Los spreads comparan segmentos del mercado entre sí, así que se anclan a
+    # ESTRENAR y POZO explícitamente y NO a la serie elegida en el sidebar: con
+    # precio_col = ZonaProp.USADO, un spread contra "la serie elegida" sería USADO
+    # contra sí mismo, idénticamente cero.
     df["spread_est_usado"] = (
-        (df["precio_usd"] - df["precio_usado"]) / df["precio_usado"] * 100
+        (df["ZonaProp.ESTRENAR"] - df["precio_usado"]) / df["precio_usado"] * 100
     )
     df["spread_pozo_usado"] = (
         (df["precio_pozo"] - df["precio_usado"]) / df["precio_usado"] * 100
@@ -47,8 +70,17 @@ def load_market_data(tc_col="CCL_Yahoo_Sintetico", precio_col="ZonaProp.ESTRENAR
 
 
 df, precio_anchor = load_market_data(
-    tc_col=params["tc_col"], precio_col=params["precio_col"]
+    tc_col=params["tc_col"],
+    precio_col=params["precio_col"],
+    costo_serie=params["costo_serie"],
 )
+
+# Nombres de las series activas, para rotular los gráficos con lo que realmente
+# se está graficando (el sidebar puede cambiar precio, costo y TC).
+PRECIO_NOM = params["precio_label"]
+COSTO_NOM  = params["costo_label"]
+TC_NOM     = params["tc_label"]
+COSTO_DESC = f"{COSTO_NOM}, dolarizado a {TC_NOM}"
 
 # Series limpias (histórico, sin NaN)
 precio_ser = df["precio_usd"].dropna()
@@ -183,8 +215,8 @@ fig_tray = make_subplots(
     vertical_spacing=0.06,
     row_heights=[0.30, 0.23, 0.23, 0.24],
     subplot_titles=[
-        "Precio de venta y costo de construcción (u$s/m²)",
-        "Ratio precio estrenar / costo construcción",
+        f"Precio de venta ({PRECIO_NOM}) y costo de construcción ({COSTO_DESC}) (u$s/m²)",
+        f"Ratio {PRECIO_NOM} / costo construcción",
         "Spread ESTRENAR vs. USADO (%)",
         "Spread POZO vs. USADO (%)",
     ],
@@ -193,9 +225,9 @@ fig_tray = make_subplots(
 # -- Panel 1: precio y costo --
 fig_tray.add_trace(go.Scatter(
     x=precio_ser.index, y=precio_ser.values,
-    mode="lines", name="ESTRENAR (ZonaProp)",
+    mode="lines", name=PRECIO_NOM,
     line=dict(color=AZUL_MED, width=2.2),
-    hovertemplate="<b>%{x|%b %Y}</b><br>Estrenar: u$s %{y:,.0f}/m²<extra></extra>",
+    hovertemplate="<b>%{x|%b %Y}</b><br>Precio: u$s %{y:,.0f}/m²<extra></extra>",
 ), row=1, col=1)
 
 fig_tray.add_trace(go.Scatter(
@@ -214,7 +246,7 @@ fig_tray.add_trace(go.Scatter(
 
 fig_tray.add_trace(go.Scatter(
     x=costo_ser.index, y=costo_ser.values,
-    mode="lines", name="Costo (Apymeco/CCL)",
+    mode="lines", name=f"Costo ({COSTO_DESC})",
     line=dict(color=NARANJA, width=2.2),
     hovertemplate="<b>%{x|%b %Y}</b><br>Costo: u$s %{y:,.0f}/m²<extra></extra>",
 ), row=1, col=1)
@@ -242,7 +274,7 @@ ratio_mean = float(ratio_ser.mean())
 
 fig_tray.add_trace(go.Scatter(
     x=ratio_ser.index, y=ratio_ser.values,
-    mode="lines", name="Ratio estrenar/costo",
+    mode="lines", name=f"Ratio {PRECIO_NOM}/costo",
     line=dict(color=VERDE, width=2.2),
     fill="tonexty" if False else None,
     hovertemplate="<b>%{x|%b %Y}</b><br>Ratio: %{y:.2f}x<extra></extra>",
@@ -346,15 +378,15 @@ st.subheader("Distribuciones históricas (KDE)")
 # sale la serie y cómo se formatea su unidad. "col" puede no existir en df si
 # combinadas.csv no trae esa serie: esas opciones se filtran al construir el menú.
 CATALOGO_KDE = {
-    "Precio de venta (serie del sidebar)": {
+    f"Precio de venta ({PRECIO_NOM})": {
         "col": "precio_usd", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
-    "Costo de construcción (Apymeco / TC)": {
+    f"Costo de construcción ({COSTO_DESC})": {
         "col": "costo_usd", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
-    "Ratio precio / costo": {
+    f"Ratio {PRECIO_NOM} / costo": {
         "col": "ratio", "xlabel": "veces",
         "fmt": ".2f", "prefix": "", "suffix": "x",
     },
@@ -366,7 +398,7 @@ CATALOGO_KDE = {
         "col": "spread_pozo_usado", "xlabel": "%",
         "fmt": ".1f", "prefix": "", "suffix": "%",
     },
-    "Margen unitario (precio − costo)": {
+    f"Margen unitario ({PRECIO_NOM} − costo)": {
         "col": "margen_unitario", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
@@ -390,7 +422,7 @@ CATALOGO_KDE = {
         "col": "Índice Remax.Valor M2 (USD)", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
-    "Tipo de cambio (el elegido en el sidebar)": {
+    f"Tipo de cambio ({TC_NOM})": {
         "col": params["tc_col"], "xlabel": "$ / u$s",
         "fmt": ",.0f", "prefix": "$ ", "suffix": "",
     },
@@ -401,9 +433,9 @@ CATALOGO_KDE = {
 }
 
 DEFAULT_KDE = [
-    "Precio de venta (serie del sidebar)",
-    "Costo de construcción (Apymeco / TC)",
-    "Ratio precio / costo",
+    f"Precio de venta ({PRECIO_NOM})",
+    f"Costo de construcción ({COSTO_DESC})",
+    f"Ratio {PRECIO_NOM} / costo",
     "Spread ESTRENAR vs. USADO",
 ]
 

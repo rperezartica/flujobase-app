@@ -221,4 +221,9 @@ def render_sidebar():
         "precio_col":    precio_col,
         "costo_serie":   COSTO_OPCIONES[costo_serie_label],
         "tc_col":        TC_OPCIONES[tc_label],
+        # Labels elegidos, para que las páginas puedan rotular sus gráficos con la
+        # serie realmente activa en vez de un nombre fijo.
+        "precio_label":  precio_serie_label,
+        "costo_label":   costo_serie_label,
+        "tc_label":      tc_label,
     }
