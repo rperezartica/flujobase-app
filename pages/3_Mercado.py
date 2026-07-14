@@ -41,6 +41,8 @@ def load_market_data(tc_col="CCL_Yahoo_Sintetico", precio_col="ZonaProp.ESTRENAR
     df["spread_pozo_usado"] = (
         (df["precio_pozo"] - df["precio_usado"]) / df["precio_usado"] * 100
     )
+    df["margen_unitario"] = df["precio_usd"] - df["costo_usd"]
+    df["brecha_ccl_oficial"] = (df[CCL_COL] / df["Oficial_BNA"] - 1) * 100
     return df, precio_anchor
 
 
@@ -340,52 +342,119 @@ st.plotly_chart(fig_tray, use_container_width=True)
 st.divider()
 st.subheader("Distribuciones históricas (KDE)")
 
-df_kde = pd.DataFrame({
-    "precio_usd": df["precio_usd"],
-    "costo_usd": df["costo_usd"],
-    "ratio": df["ratio"],
-    "spread_est_usado": df["spread_est_usado"],
-}).dropna()
-
-paneles_kde = [
-    {
-        "key": "precio_usd", "hoy": precio_hoy,
-        "titulo": "Precio de venta a estrenar",
-        "xlabel": "u$s / m²",
-        "color_kde": AZUL_MED, "color_hoy": ROJO,
+# Catálogo de variables graficables. Cada entrada define de qué columna de df
+# sale la serie y cómo se formatea su unidad. "col" puede no existir en df si
+# combinadas.csv no trae esa serie: esas opciones se filtran al construir el menú.
+CATALOGO_KDE = {
+    "Precio de venta (serie del sidebar)": {
+        "col": "precio_usd", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
-    {
-        "key": "costo_usd", "hoy": costo_hoy,
-        "titulo": "Costo de construcción (Apymeco / CCL)",
-        "xlabel": "u$s / m²",
-        "color_kde": NARANJA, "color_hoy": ROJO,
+    "Costo de construcción (Apymeco / TC)": {
+        "col": "costo_usd", "xlabel": "u$s / m²",
         "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
     },
-    {
-        "key": "ratio", "hoy": ratio_hoy,
-        "titulo": "Ratio precio estrenar / costo",
-        "xlabel": "veces",
-        "color_kde": VERDE, "color_hoy": ROJO,
+    "Ratio precio / costo": {
+        "col": "ratio", "xlabel": "veces",
         "fmt": ".2f", "prefix": "", "suffix": "x",
     },
-    {
-        "key": "spread_est_usado", "hoy": spread_hoy,
-        "titulo": "Spread ESTRENAR vs. USADO",
-        "xlabel": "%",
-        "color_kde": VIOLETA, "color_hoy": ROJO,
+    "Spread ESTRENAR vs. USADO": {
+        "col": "spread_est_usado", "xlabel": "%",
         "fmt": ".1f", "prefix": "", "suffix": "%",
     },
+    "Spread POZO vs. USADO": {
+        "col": "spread_pozo_usado", "xlabel": "%",
+        "fmt": ".1f", "prefix": "", "suffix": "%",
+    },
+    "Margen unitario (precio − costo)": {
+        "col": "margen_unitario", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "ZP ESTRENAR": {
+        "col": "ZonaProp.ESTRENAR", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "ZP POZO": {
+        "col": "ZonaProp.POZO", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "ZP USADO": {
+        "col": "ZonaProp.USADO", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "ZP INDEX CABA": {
+        "col": "ZonaProp.INDEX CABA", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "Remax-UCEMA": {
+        "col": "Índice Remax.Valor M2 (USD)", "xlabel": "u$s / m²",
+        "fmt": ",.0f", "prefix": "u$s ", "suffix": "",
+    },
+    "Tipo de cambio (el elegido en el sidebar)": {
+        "col": params["tc_col"], "xlabel": "$ / u$s",
+        "fmt": ",.0f", "prefix": "$ ", "suffix": "",
+    },
+    "Brecha CCL vs. oficial": {
+        "col": "brecha_ccl_oficial", "xlabel": "%",
+        "fmt": ".1f", "prefix": "", "suffix": "%",
+    },
+}
+
+DEFAULT_KDE = [
+    "Precio de venta (serie del sidebar)",
+    "Costo de construcción (Apymeco / TC)",
+    "Ratio precio / costo",
+    "Spread ESTRENAR vs. USADO",
 ]
 
+opciones_kde = [k for k, v in CATALOGO_KDE.items() if v["col"] in df.columns]
+
+vars_kde = st.multiselect(
+    "Variables a graficar (hasta 5)",
+    options=opciones_kde,
+    default=[v for v in DEFAULT_KDE if v in opciones_kde],
+    max_selections=5,
+    help="Cada variable elegida se grafica en su propio panel, con su densidad "
+         "histórica, el valor de hoy y su percentil. La curva de cada panel se "
+         "puede descargar en CSV.",
+)
+
+if not vars_kde:
+    st.info("Elegí al menos una variable para ver su distribución.")
+    st.stop()
+
+# La paleta se cicla entre los paneles; el rojo queda reservado para "hoy".
+PALETA_KDE = [AZUL_MED, NARANJA, VERDE, VIOLETA, AZUL_OSCURO]
+
+paneles_kde = []
+for i, nombre in enumerate(vars_kde):
+    meta = CATALOGO_KDE[nombre]
+    paneles_kde.append({
+        "key": meta["col"], "titulo": nombre, "xlabel": meta["xlabel"],
+        "color_kde": PALETA_KDE[i % len(PALETA_KDE)], "color_hoy": ROJO,
+        "fmt": meta["fmt"], "prefix": meta["prefix"], "suffix": meta["suffix"],
+    })
+
+# Cada serie se limpia por separado (no con un dropna conjunto): las series
+# tienen coberturas distintas — Remax arranca en 2020, MEP tiene huecos — y un
+# dropna conjunto recortaría todas al tramo común, achicando cada distribución
+# a la peor cobertura del grupo.
+df_kde = df[[p["key"] for p in paneles_kde]]
+
 filas_marcadores = []
+slugs = {}
 
 for panel in paneles_kde:
     st.markdown(f"**{panel['titulo']}**")
     serie_k = df_kde[panel["key"]].dropna()
     if len(serie_k) < 5:
-        st.warning("Datos insuficientes para KDE.")
+        st.warning("Datos insuficientes para estimar la densidad de esta variable.")
         continue
+
+    panel["hoy"] = float(serie_k.iloc[-1])
+    # Nombre de archivo estable y sin acentos/espacios para el CSV de cada panel.
+    slug = "".join(c if c.isalnum() else "_" for c in panel["titulo"].lower())[:40]
+    slugs[panel["key"]] = slug
 
     traces_k, pct_k, df_curva_k, marc_k = kde_traces(
         serie_k, panel["hoy"],
@@ -410,9 +479,9 @@ for panel in paneles_kde:
     st.download_button(
         "⬇️ Descargar curva (CSV)",
         data=df_curva_k.to_csv(index=False, float_format="%.8g").encode("utf-8"),
-        file_name=f"kde_{panel['key']}.csv",
+        file_name=f"kde_{slug}.csv",
         mime="text/csv",
-        key=f"dl_kde_{panel['key']}",
+        key=f"dl_kde_{slug}",
         help="Curva de densidad evaluada (x, densidad) para graficar en Datawrapper "
              "como área o línea. La columna densidad_hasta_hoy reproduce el sombreado "
              "a la izquierda del valor actual.",
@@ -431,7 +500,7 @@ st.caption(
 col_dl1, col_dl2 = st.columns(2)
 
 col_dl1.download_button(
-    "⬇️ Marcadores de los 4 paneles (CSV)",
+    f"⬇️ Marcadores de los {len(filas_marcadores)} paneles (CSV)",
     data=pd.DataFrame(filas_marcadores).to_csv(index=False, float_format="%.6g").encode("utf-8"),
     file_name="kde_marcadores.csv",
     mime="text/csv",
@@ -444,8 +513,8 @@ col_dl2.download_button(
     data=df_kde.to_csv(float_format="%.6g").encode("utf-8"),
     file_name="series_historicas_mercado.csv",
     mime="text/csv",
-    help="Las observaciones mensuales que alimentan las cuatro distribuciones "
-         "(precio, costo, ratio y spread), con su fecha.",
+    help="Las observaciones mensuales que alimentan las distribuciones elegidas, "
+         "con su fecha.",
 )
 
 # ============================================================
@@ -454,33 +523,15 @@ col_dl2.download_button(
 st.divider()
 st.subheader("Posición actual en la distribución histórica")
 
-col1, col2, col3, col4 = st.columns(4)
+if not filas_marcadores:
+    st.stop()
 
-def pct_label(serie, val):
-    arr = serie.dropna().values
-    return f"{(arr < val).mean()*100:.0f}°"
-
-col1.metric(
-    "Precio estrenar",
-    f"u$s {precio_hoy:,.0f}/m²",
-    delta=f"Percentil {pct_label(precio_ser, precio_hoy)}",
-    delta_color="off",
-)
-col2.metric(
-    "Costo construcción",
-    f"u$s {costo_hoy:,.0f}/m²",
-    delta=f"Percentil {pct_label(costo_ser, costo_hoy)}",
-    delta_color="off",
-)
-col3.metric(
-    "Ratio precio/costo",
-    f"{ratio_hoy:.2f}x",
-    delta=f"Percentil {pct_label(ratio_ser, ratio_hoy)}",
-    delta_color="off",
-)
-col4.metric(
-    "Spread estrenar/usado",
-    f"{spread_hoy:.1f}%",
-    delta=f"Percentil {pct_label(spread_ser, spread_hoy)}",
-    delta_color="off",
-)
+for fila, col in zip(filas_marcadores, st.columns(len(filas_marcadores))):
+    meta = CATALOGO_KDE[fila["panel"]]
+    valor = f"{meta['prefix']}{fila['hoy']:{meta['fmt']}}{meta['suffix']}"
+    col.metric(
+        fila["panel"],
+        valor,
+        delta=f"Percentil {fila['percentil_hoy']:.0f}°",
+        delta_color="off",
+    )
